@@ -1,0 +1,27 @@
+#include "stdio.h"
+#include "encoder.h"
+#include "lcd_blue.h"
+
+adc_init();
+encoder_init();
+ticks_init();
+tft_init(2,WHITE,BLACK);
+int ticks_img = 0;
+int encode1;
+int encode2;
+
+while(1)
+{
+	if ( ticks_img != get_real_ticks())
+	{
+		ticks_img = get_real_ticks();
+		if (ticks_img %100 == 0)
+		{
+			tft_clear();
+			encode1 = encoder_count(1);
+			encode2 = encoder_count(2);
+			tft_prints(0,0,"encoder1 is %d\n", encode1);
+			tft_prints(0,90,"encoder2 is %d\n", encode2);
+		}
+	}
+}

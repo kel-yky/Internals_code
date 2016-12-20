@@ -1,0 +1,202 @@
+//updated code as of 4.11 00:00, revise in the morning
+
+#include "main.h"
+//#include "linear_ccd.h"
+#include "stdlib.h"
+#include "stdio.h"
+//#include "uart.h"
+
+
+
+//---PID values; to be modified-----------------------------------
+	int kp = 10;														//5
+	int ki = 40;
+	int kd = 40;
+	
+//---PID Initializer----------------------------------------------
+	int err_acc=0;
+	int err_last=0;
+	int diff=0;
+	int steerError = 0;
+
+	int PWM = 750;
+
+
+//---Median Filter (dynaimic sized version)--------------------------------------------------
+
+		void sorting(int* ccdValue, int startingPoint){
+			for(int i = startingPoint + 1; i < startingPoint + 4; i++){
+				int moveValue = ccdValue[i];
+				for(int j = i - 1; j >= 0; j--){
+					if (moveValue <= ccdValue[j]){
+						ccdValue[j + 1] = ccdValue[j];
+						if(j == 0)ccdValue[0] = moveValue;
+						
+					} else {
+						ccdValue[j + 1] = moveValue;
+					}
+				}
+			}
+		}
+
+		int median(int* ccdValue, int startingPoint){
+			 return (ccdValue[startingPoint + 1] + ccdValue[startingPoint + 2]) / 2;
+		}
+
+
+		void medianFilter(int* ccdValue, int* _32BitArray, const int THRESHOLD, const int SIZE){
+			int _32BitArrayIndicator = 0;
+				for(int startingPoint = 0; startingPoint < SIZE; startingPoint += 4){
+					sorting(ccdValue, startingPoint);
+					if(median(ccdValue, startingPoint) > THRESHOLD) _32BitArray[_32BitArrayIndicator] = 1;
+					else _32BitArray[_32BitArrayIndicator] = 0;
+					_32BitArrayIndicator++;
+				}
+			
+		}
+
+/*
+void printArr(int* array, int size){
+	for(int i = 0; i < size; i++){
+		printf("%d ", array[i]);
+	}
+	printf("\n");
+}
+*/
+/*
+unsigned int binaryToDecimal(int *BitArray, const int BIT){
+	unsigned int decimal = 0, tmp = 0;
+	for(int i = 0; i < BIT; i++){
+			tmp = BitArray[i];
+			if(tmp == 0) continue;
+		for(int j = i; j < BIT - 1; j++)
+		{	tmp *= 2;	}
+		
+		decimal += tmp;
+	}
+	return decimal;
+}
+*/
+
+
+//---PID control---------------------------------------------------------------
+		int PID_control(int error, int P, int I, int D)
+		{
+				err_acc += error;
+				diff = error - err_last;
+				err_last = error;
+				return P*error + err_acc/I + D*diff;
+		}
+
+
+	//---position table (dynaimc sized version)-----------------------------------------------------
+		int position_value(int *readings, int size)
+		{
+			int sum = 0 ;
+			int count = 0;
+
+			for (int shift = 0; shift < size; shift++)
+			{
+				if (readings[shift] ==1 )
+				{
+					sum = sum + (2*shift + 1);
+					count++;
+				}
+			}
+			if ( count == 0 )
+			{	return size; }
+			else
+			{	if (sum%count > 5)
+				{	return ((sum/count) +1);	}
+				else
+				{	return (sum/count);	}
+			}
+		}
+
+
+	
+	
+int main()
+{
+			//---initialization--------------------------------------------------------
+			adc_init();
+			linear_ccd_init();
+			motor_init(71, 100, 5000);				// 10kHz  speed 0-100	
+			servo_init(143, 10000, 750);				// 0-65535, 750-middle ; range: 450-1050
+			ticks_init();
+			tft_init(1, BLACK, WHITE);
+			
+			uart_init(COM3, 115200);
+
+			tft_clear();
+				
+				int threshold = 100;  //to be tested using ccd
+				int Size = 128;
+				int medArray[32];
+				//		int interArray[32];
+			
+
+				//--- initiallising linear ccd buffer---------------------------
+				int buffer[128];
+				int display[128];
+				
+				for (int i = 0; i<32;i++)
+				{ medArray[i] = 0;	}
+				
+				for (int i = 0; i<128;i++)
+				{	buffer[i] = 0;
+					display[i] = 0;	}
+
+				u32 ticks_img = 0;
+				
+			while (1)
+
+			{	
+				motor_control(MOTOR1, 0, 50);						// set speed to be 50% first
+						
+				if (ticks_img!= get_real_ticks())
+				{		
+					ticks_img = get_real_ticks();
+					
+					
+			//---linear_ccd_read & display-------------------------------
+					if (ticks_img %20 == 0)
+					{	
+						linear_ccd_read();
+										
+						uart_tx(COM3, "%d\n", buffer[64]);
+					}				
+			
+					if (ticks_img % 100 == 0)		
+					//---put pixels on LCD---------------------------------------
+					{
+						for (int i= 0; i<128;i++)
+						{		
+							tft_put_pixel(i, display[i], BLACK);								// clear pixel
+							buffer[i] = linear_ccd_buffer1[i];									// update buffer
+							display[i] = buffer[i]*8/10;
+							tft_put_pixel(i, display[i], BLUE);									// print pixel
+						}
+
+			//---Steer Control----------------------------------------
+						
+					//---median filter------------------------------------------------
+						medianFilter(buffer,medArray,threshold, Size); // check threshold and group median
+
+					//---central = 0 normalization; -------------------------------------
+						steerError = position_value(buffer,32) - 32; 
+
+					//---PID PWM control-------------------------------------------------
+						int Steer_Adjust = PID_control(steerError, kp, ki, kd);	// int; initPID = 0
+						PWM = PWM + Steer_Adjust;
+
+					//---prevent overdrive--------------------------------------------------
+						PWM = PWM > 1050? PWM:1050;
+						PWM = PWM < 450?PWM:450;
+
+						servo_control(SERVO1, PWM);
+				
+					}
+				}
+		}
+}
